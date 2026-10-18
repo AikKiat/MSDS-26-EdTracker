@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageExactEdTrackerAmplifyApp",
+      "Effect": "Allow",
+      "Action": [
+        "amplify:GetApp",
+        "amplify:UpdateApp"
+      ],
+      "Resource": "arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz"
+    },
+    {
+      "Sid": "DeployExactEdTrackerMainBranch",
+      "Effect": "Allow",
+      "Action": [
+        "amplify:CreateBranch",
+        "amplify:CreateDeployment",
+        "amplify:GetBranch",
+        "amplify:ListJobs",
+        "amplify:StartDeployment",
+        "amplify:UpdateBranch"
+      ],
+      "Resource": [
+        "arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz/branches/main",
+        "arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz/branches/main/deployments/*"
+      ]
+    },
+    {
+      "Sid": "ReadExactEdTrackerMainJobs",
+      "Effect": "Allow",
+      "Action": "amplify:GetJob",
+      "Resource": "arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz/branches/main/jobs/*"
+    }
+  ]
+}

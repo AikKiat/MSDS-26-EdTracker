@@ -23,3 +23,16 @@ dist-ssr
 *.sln
 *.sw?
 **/.env
+**/.env.*
+!**/.env.example
+
+# Rust and AWS SAM build output
+**/target/
+.aws-sam/
+
+# Local SAM environment overrides may contain secrets
+env.local.json
+
+# Local AWS deployment inventory (contains account-specific operational values)
+deployment-inventory.local.env
+.amplify-deploy.zip

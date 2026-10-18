@@ -1,0 +1,18 @@
+version = 0.1
+
+[default.global.parameters]
+region = "ap-southeast-1"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "edtracker-dev"
+s3_bucket = "msds-857196482054-ap-southeast-1-an"
+s3_prefix = "sam-artifacts/edtracker-dev"
+role_arn = "arn:aws:iam::857196482054:role/edtracker-cloudformation-execution"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+parameter_overrides = "EnvironmentName=dev AllowedOrigin=https://main.d1fob4i4hsu1oz.amplifyapp.com AssetsBucketName=msds-857196482054-ap-southeast-1-an DatabaseHost=database-1.c5owc62auwyo.ap-southeast-1.rds.amazonaws.com DatabasePort=5432 DatabaseName=postgres ExistingSubnetIds=subnet-024bed39586b9d632,subnet-0ee1beac920cf812c ExistingSecurityGroupIds=sg-0fb0e6338be813a11 ExistingVpcId=vpc-0ae5071e51958a0cd ExistingRouteTableIds=rtb-041a655344cf2b5de ApiFunctionRoleArn=arn:aws:iam::857196482054:role/edtracker-lambda-execution CreateApiStage=true"

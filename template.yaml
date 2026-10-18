@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: EdTracker API using existing PostgreSQL and object storage resources
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedPattern: '[a-z0-9-]+'
+    Description: Short environment name used in resource tags and names.
+  AllowedOrigin:
+    Type: String
+    Default: '*'
+    Description: CORS origin for the Amplify frontend. Use its exact HTTPS URL in production.
+  DatabaseName:
+    Type: String
+    Default: postgres
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+  DatabaseHost:
+    Type: String
+    Description: Endpoint of the existing PostgreSQL RDS instance.
+  DatabasePort:
+    Type: Number
+    Default: 5432
+  AssetsBucketName:
+    Type: String
+    Description: Name of the existing private S3 assets bucket.
+  ExistingSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two existing subnets used by the RDS instance.
+  ExistingSecurityGroupIds:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Existing RDS security group; Lambda uses the same group for database access.
+  ExistingVpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC containing the RDS instance and Lambda subnets.
+  ExistingRouteTableIds:
+    Type: List<String>
+    Description: Existing route tables used by the Lambda subnets.
+  ApiFunctionRoleArn:
+    Type: String
+    Description: ARN of the pre-provisioned EdTracker Lambda execution role.
+  CreateApiStage:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Create the default API stage after its exact API ID has been authorized.
+
+Conditions:
+  ShouldCreateApiStage: !Equals [!Ref CreateApiStage, 'true']
+
+Globals:
+  Function:
+    Architectures:
+      - arm64
+    MemorySize: 256
+    Timeout: 15
+    Tracing: Active
+    Environment:
+      Variables:
+        APP_ENV: !Ref EnvironmentName
+
+Resources:
+  AssetsS3VpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref ExistingVpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: !Ref ExistingRouteTableIds
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListExactAssetsBucket
+            Effect: Allow
+            Principal: '*'
+            Action: s3:ListBucket
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${AssetsBucketName}'
+          - Sid: ManageExactAssetsObjects
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${AssetsBucketName}/*'
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/http-api/${AWS::StackName}'
+      RetentionInDays: 14
+      Tags:
+        - Key: Application
+          Value: EdTracker
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref AllowedOrigin
+        AllowHeaders:
+          - content-type
+          - authorization
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        MaxAge: 600
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  RootRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: 'ANY /'
+      Target: !Sub 'integrations/${ApiIntegration}'
+
+  ProxyRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: 'ANY /{proxy+}'
+      Target: !Sub 'integrations/${ApiIntegration}'
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Condition: ShouldCreateApiStage
+    Properties:
+      ApiId: !Ref Api
+      StageName: $default
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","status":"$context.status","routeKey":"$context.routeKey","responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage"}'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-api'
+      CodeUri: backend/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Role: !Ref ApiFunctionRoleArn
+      LoggingConfig:
+        LogFormat: JSON
+      VpcConfig:
+        SecurityGroupIds: !Ref ExistingSecurityGroupIds
+        SubnetIds: !Ref ExistingSubnetIds
+      Environment:
+        Variables:
+          ASSETS_BUCKET: !Ref AssetsBucketName
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_PORT: !Ref DatabasePort
+          DATABASE_NAME: !Ref DatabaseName
+      Tags:
+        Application: EdTracker
+        Environment: !Ref EnvironmentName
+
+  ApiFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*'
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-api'
+      RetentionInDays: 14
+      Tags:
+        - Key: Application
+          Value: EdTracker
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+Outputs:
+  ApiId:
+    Description: HTTP API identifier used to scope stage-management permissions.
+    Value: !Ref Api
+  ApiUrl:
+    Description: Set this value as VITE_API_BASE_URL in Amplify Hosting.
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  AssetsBucketName:
+    Description: Existing private S3 bucket used for uploaded assets.
+    Value: !Ref AssetsBucketName
+  DatabaseEndpoint:
+    Description: Existing private PostgreSQL endpoint, reachable only from inside the VPC.
+    Value: !Ref DatabaseHost
+  AssetsS3VpcEndpointId:
+    Description: Gateway endpoint providing private S3 access from the Lambda VPC.
+    Value: !Ref AssetsS3VpcEndpoint
