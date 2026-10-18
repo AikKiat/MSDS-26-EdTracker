@@ -1,0 +1,142 @@
+name: Backend CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "template.yaml"
+      - "samconfig.toml"
+      - ".github/workflows/backend.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "template.yaml"
+      - "samconfig.toml"
+      - ".github/workflows/backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  AWS_ACCOUNT_ID: "857196482054"
+  BACKEND_DEPLOY_ROLE_ARN: arn:aws:iam::857196482054:role/edtracker-github-backend-deployer
+  STACK_NAME: edtracker-dev
+
+jobs:
+  test:
+    name: Test and validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            backend/target
+          key: backend-rust-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock', 'backend/Cargo.toml') }}
+          restore-keys: |
+            backend-rust-${{ runner.os }}-
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path backend/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run backend tests
+        run: cargo test --manifest-path backend/Cargo.toml --all-targets --locked
+
+      - name: Install AWS SAM CLI
+        uses: aws-actions/setup-sam@v3
+        with:
+          version: 1.168.0
+          use-installer: true
+          token: ${{ github.token }}
+
+      - name: Validate SAM template
+        run: sam validate --lint
+
+  deploy:
+    name: Deploy backend
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-unknown-linux-gnu
+          rustup default stable
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            backend/target
+          key: backend-rust-arm64-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock', 'backend/Cargo.toml') }}
+          restore-keys: |
+            backend-rust-arm64-${{ runner.os }}-
+
+      - name: Install AWS SAM CLI
+        uses: aws-actions/setup-sam@v3
+        with:
+          version: 1.168.0
+          use-installer: true
+          token: ${{ github.token }}
+
+      - name: Install Cargo Lambda and Zig
+        run: |
+          python3 -m pip install --user cargo-lambda==1.9.2
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ env.BACKEND_DEPLOY_ROLE_ARN }}
+          role-session-name: backend-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          unset-current-credentials: true
+
+      - name: Build Lambda package
+        run: sam build --cached --parallel
+
+      - name: Deploy SAM stack
+        run: sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
+
+      - name: Verify backend health
+        run: |
+          api_url="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)"
+          test -n "$api_url"
+          curl --fail --silent --show-error --retry 5 --retry-delay 5 "$api_url/health"

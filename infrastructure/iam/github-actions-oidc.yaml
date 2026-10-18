@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Repository-scoped GitHub Actions OIDC roles for EdTracker CI/CD
+
+Parameters:
+  GitHubSubject:
+    Type: String
+    Default: repo:AikKiat@184718943/MSDS-26-EdTracker@1421605462:ref:refs/heads/main
+    Description: Immutable GitHub OIDC subject for the repository main branch.
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ''
+    Description: Supply an existing token.actions.githubusercontent.com provider ARN, or leave blank to create it.
+
+Conditions:
+  CreateGitHubOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, '']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Application
+          Value: EdTracker
+
+  BackendDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: edtracker-github-backend-deployer
+      Description: Deploys only the EdTracker SAM backend from the GitHub main branch.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustExactGitHubRepositoryMainBranch
+            Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Ref GitHubSubject
+      Policies:
+        - PolicyName: DeployEdTrackerBackend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DeployEdTrackerStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplateSummary
+                Resource:
+                  - arn:aws:cloudformation:ap-southeast-1:857196482054:stack/edtracker-dev/*
+                  - arn:aws:cloudformation:ap-southeast-1:aws:transform/Serverless-2016-10-31
+              - Sid: UploadSamArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: arn:aws:s3:::msds-857196482054-ap-southeast-1-an/sam-artifacts/edtracker-dev/*
+              - Sid: ReadSamArtifactBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: arn:aws:s3:::msds-857196482054-ap-southeast-1-an
+              - Sid: PassEdTrackerCloudFormationRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: arn:aws:iam::857196482054:role/edtracker-cloudformation-execution
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+      Tags:
+        - Key: Application
+          Value: EdTracker
+        - Key: DeploymentTarget
+          Value: Backend
+
+  FrontendDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: edtracker-github-frontend-deployer
+      Description: Deploys only the EdTracker Amplify frontend from the GitHub main branch.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustExactGitHubRepositoryMainBranch
+            Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Ref GitHubSubject
+      Policies:
+        - PolicyName: DeployEdTrackerFrontend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ManageExactEdTrackerAmplifyApp
+                Effect: Allow
+                Action:
+                  - amplify:GetApp
+                  - amplify:UpdateApp
+                Resource: arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz
+              - Sid: DeployExactEdTrackerMainBranch
+                Effect: Allow
+                Action:
+                  - amplify:CreateBranch
+                  - amplify:CreateDeployment
+                  - amplify:GetBranch
+                  - amplify:ListJobs
+                  - amplify:StartDeployment
+                  - amplify:UpdateBranch
+                Resource:
+                  - arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz/branches/main
+                  - arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz/branches/main/deployments/*
+              - Sid: ReadExactEdTrackerMainJobs
+                Effect: Allow
+                Action: amplify:GetJob
+                Resource: arn:aws:amplify:ap-southeast-1:857196482054:apps/d1fob4i4hsu1oz/branches/main/jobs/*
+      Tags:
+        - Key: Application
+          Value: EdTracker
+        - Key: DeploymentTarget
+          Value: Frontend
+
+Outputs:
+  BackendDeployRoleArn:
+    Value: !GetAtt BackendDeployRole.Arn
+  FrontendDeployRoleArn:
+    Value: !GetAtt FrontendDeployRole.Arn
+  GitHubOidcProviderArn:
+    Value: !If
+      - CreateGitHubOidcProvider
+      - !Ref GitHubOidcProvider
+      - !Ref ExistingGitHubOidcProviderArn

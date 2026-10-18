@@ -116,6 +116,75 @@ types. The API CORS configuration allows only the exact Amplify HTTPS origin.
 `VITE_API_BASE_URL` is browser-visible configuration. Never place passwords or
 AWS credentials in a `VITE_` variable.
 
+## GitHub Actions CI/CD
+
+Frontend and backend automation are deliberately separate:
+
+- `.github/workflows/backend.yml` runs only for backend, SAM template, or
+  backend workflow changes. Pull requests run formatting, Clippy, tests, and
+  SAM validation. A successful push to `main` deploys the SAM stack and checks
+  `/health`.
+- `.github/workflows/frontend.yml` runs only for frontend, Amplify, or frontend
+  workflow changes. Pull requests run lint and build. A successful push to
+  `main` uploads the built static site to the existing Amplify branch, waits
+  for the job to succeed, and smoke-tests the public URL.
+- Both workflows can also be started independently with `workflow_dispatch`.
+
+The deploy jobs use GitHub OIDC and short-lived AWS sessions. They do not use
+AWS access keys or GitHub repository secrets. Because this repository was
+created after GitHub introduced immutable OIDC subjects, the trust policy is
+bound to owner ID `184718943`, repository ID `1421605462`, and the `main`
+branch.
+
+Deploy the one-time OIDC bootstrap with an IAM administrator or root bootstrap
+profile:
+
+```powershell
+aws login --profile edtracker-bootstrap
+
+aws cloudformation deploy `
+  --template-file infrastructure/iam/github-actions-oidc.yaml `
+  --stack-name edtracker-github-actions-identity `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --region ap-southeast-1 `
+  --profile edtracker-bootstrap
+
+aws logout --profile edtracker-bootstrap
+```
+
+The bootstrap stack `edtracker-github-actions-identity` is currently deployed
+and complete. The command above is retained for controlled updates to the
+repository trust or CI role policies.
+
+The bootstrap creates two independent roles:
+
+- `edtracker-github-backend-deployer`, limited to the existing SAM stack,
+  artifact prefix, and CloudFormation service role;
+- `edtracker-github-frontend-deployer`, limited to the existing Amplify app and
+  its `main` branch.
+
+If the AWS account already has a GitHub OIDC provider, deploy the bootstrap
+with `ExistingGitHubOidcProviderArn` set to that provider ARN so CloudFormation
+reuses it instead of creating a duplicate.
+
+No GitHub-side AWS secrets or variables are required. Once the bootstrap stack
+exists, commit and push the workflow files to `main`.
+
+## Backend architecture direction
+
+`how_loco_works.pdf` describes the intended full Loco backend: migrations are
+the schema source, SeaORM entities are generated, models contain application
+logic, DTOs define the API contract and TypeScript bindings, controllers expose
+the routes, and `app.rs` registers the components. Runtime secrets such as
+`DATABASE_URL` and `JWT_SECRET` belong in environment-backed configuration,
+not source control.
+
+The currently deployed backend is still the smaller Rust Lambda handler in
+`backend/src/main.rs`. The backend workflow deploys that implementation today.
+Its formatting, Clippy, and Cargo test stages will continue to apply if the
+backend is later expanded into a Loco Cargo workspace, but the Lambda packaging
+and runtime design should be revisited as part of that migration.
+
 ## Current backend scope
 
 The Rust Lambda currently implements `/` and `/health`. The RDS and S3 resource
