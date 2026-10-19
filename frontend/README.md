@@ -13,4 +13,4 @@
 6. **utils folder (helper functions)** — contains reusable helper functions.
 7. **assets folder (static files)** — contains images, icons, logos, etc.
 8. **styles folder (styling)** — contains global/shared CSS and styling files.
-9. **config folder (configuration)** — contains frontend configuration, i.e. backend API URL.
+9. **config folder (configuration)** — contains frontend configuration, i.e. backend API URL.10. **mocks folder (fake backend)** — in-memory stand-in for the backend and AI assistant, used by the services while `VITE_USE_MOCKS` is not `"false"`. Data resets on page reload.
